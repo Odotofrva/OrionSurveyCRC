@@ -322,7 +322,7 @@
         <button class="switch-btn" type="button" onclick="showLanguageChooser()" id="switchBtn">Change language</button>
       </div>
       <p class="privacy-note" id="privacyNote">
-        Reviews are saved in this browser on this device. For a public live review board shared across all visitors, connect this app to a database such as Supabase or Firebase.
+        Feedback is stored securely. Only approved reviews are published, without customer names.
       </p>
     </section>
 
@@ -336,7 +336,7 @@
 
     <section class="feed-card hidden" id="feedCard">
       <h2 id="feedTitle">Recent reviews</h2>
-      <p class="sub" id="feedSub">Feedback shared through this device appears below.</p>
+      <p class="sub" id="feedSub">Only approved customer feedback appears below.</p>
       <div class="reviews" id="reviews"></div>
     </section>
 
@@ -345,7 +345,11 @@
     </footer>
   </main>
 
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <script src="config.js"></script>
   <script>
+    const configured = window.CRC_SUPABASE_URL?.startsWith("https://") && !window.CRC_SUPABASE_URL.includes("YOUR-PROJECT") && window.CRC_SUPABASE_KEY && !window.CRC_SUPABASE_KEY.includes("YOUR_");
+    const db = configured ? supabase.createClient(window.CRC_SUPABASE_URL, window.CRC_SUPABASE_KEY) : null;
     const translations = {
       en: {
         eyebrow:"Clean Rite Center • Customer Experience",
@@ -360,18 +364,18 @@
         feedbackPlaceholder:"Tell us about your visit...",
         submitBtn:"Post review",
         switchBtn:"Change language",
-        privacy:"Reviews are saved in this browser on this device. For a public live review board shared across all visitors, connect this app to a database such as Supabase or Firebase.",
+        privacy:"Feedback is stored securely. Only approved reviews are published, without customer names.",
         statsTitle:"Review summary",
         avgLabel:"Average rating",
         countLabel:"Total reviews",
         feedTitle:"Recent reviews",
-        feedSub:"Feedback shared through this device appears below.",
+        feedSub:"Only approved customer feedback appears below.",
         footer:"Built by Orion • Customer Service & Community Engagement Project",
         anonymous:"Anonymous guest",
         empty:"No reviews yet. Be the first to share your experience.",
         needRating:"Please select a star rating.",
         needFeedback:"Please enter your feedback.",
-        posted:"Thank you. Your review has been posted."
+        posted:"Thank you! Your review was submitted for approval."
       },
       es: {
         eyebrow:"Clean Rite Center • Experiencia del Cliente",
@@ -386,18 +390,18 @@
         feedbackPlaceholder:"Cuéntanos sobre tu visita...",
         submitBtn:"Publicar reseña",
         switchBtn:"Cambiar idioma",
-        privacy:"Las reseñas se guardan en este navegador y en este dispositivo. Para tener un panel público compartido entre todos los visitantes, conecta esta aplicación a una base de datos como Supabase o Firebase.",
+        privacy:"Los comentarios se guardan de forma segura. Solo se publican reseñas aprobadas, sin nombres de clientes.",
         statsTitle:"Resumen de reseñas",
         avgLabel:"Calificación promedio",
         countLabel:"Reseñas totales",
         feedTitle:"Reseñas recientes",
-        feedSub:"Los comentarios compartidos desde este dispositivo aparecen abajo.",
+        feedSub:"Solo aparecen los comentarios aprobados.",
         footer:"Creado por Orion • Proyecto de Servicio al Cliente y Participación Comunitaria",
         anonymous:"Visitante anónimo",
         empty:"Todavía no hay reseñas. Sé la primera persona en compartir tu experiencia.",
         needRating:"Selecciona una calificación de estrellas.",
         needFeedback:"Escribe tus comentarios.",
-        posted:"Gracias. Tu reseña ha sido publicada."
+        posted:"¡Gracias! Tu reseña se envió para aprobación."
       }
     };
 
@@ -420,7 +424,7 @@
       els.reviewCard.classList.remove("hidden");
       els.statsCard.classList.remove("hidden");
       els.feedCard.classList.remove("hidden");
-      renderReviews();
+      loadApprovedReviews();
       window.scrollTo({top:0,behavior:"smooth"});
     }
 
@@ -450,12 +454,15 @@
       document.documentElement.lang=currentLang || "en";
     }
 
-    function getReviews(){
-      try{return JSON.parse(localStorage.getItem("crc_reviews")||"[]")}catch{return[]}
-    }
-
-    function saveReviews(reviews){
-      localStorage.setItem("crc_reviews", JSON.stringify(reviews));
+    let publicReviews = [];
+    async function loadApprovedReviews(){
+      if(!db){ els.status.style.color="#b42318"; els.status.textContent="Supabase is not configured. Update config.js."; return; }
+      const {data,error} = await db.from("approved_surveys")
+        .select("id,rating,feedback,created_at")
+        .order("created_at",{ascending:false}).limit(100);
+      if(error){console.error(error); els.status.style.color="#b42318"; els.status.textContent="Could not load reviews."; return;}
+      publicReviews=data||[];
+      renderReviews();
     }
 
     function escapeHTML(str=""){
@@ -466,7 +473,7 @@
 
     function renderReviews(){
       const t = translations[currentLang || "en"];
-      const data = getReviews().sort((a,b)=>b.createdAt-a.createdAt);
+      const data = publicReviews;
       document.getElementById("reviewCount").textContent = data.length;
       document.getElementById("avgRating").textContent =
         data.length ? (data.reduce((s,r)=>s+Number(r.rating),0)/data.length).toFixed(1) + " ★" : "—";
@@ -477,13 +484,13 @@
       }
 
       els.reviews.innerHTML = data.map(r=>{
-        const date = new Date(r.createdAt);
+        const date = new Date(r.created_at);
         const stars = "★".repeat(r.rating) + "☆".repeat(5-r.rating);
         return `
           <article class="review">
             <div class="review-top">
               <div>
-                <div class="review-name">${escapeHTML(r.name || t.anonymous)}</div>
+                <div class="review-name">${escapeHTML(t.anonymous)}</div>
                 <div class="review-stars" aria-label="${r.rating} out of 5 stars">${stars}</div>
               </div>
               <div class="review-time">${date.toLocaleDateString(currentLang==="es"?"es-US":"en-US",{year:"numeric",month:"short",day:"numeric"})}</div>
@@ -493,40 +500,25 @@
       }).join("");
     }
 
-    els.reviewForm.addEventListener("submit", (e)=>{
+    els.reviewForm.addEventListener("submit", async (e)=>{
       e.preventDefault();
-      const t = translations[currentLang || "en"];
-      const name = document.getElementById("name").value.trim();
-      const feedback = document.getElementById("feedback").value.trim();
-      const ratingNode = document.querySelector('input[name="rating"]:checked');
-
-      if(!ratingNode){
-        els.status.style.color="#b42318";
-        els.status.textContent=t.needRating;
-        return;
-      }
-      if(!feedback){
-        els.status.style.color="#b42318";
-        els.status.textContent=t.needFeedback;
-        return;
-      }
-
-      const review = {
-        name,
-        feedback,
-        rating:Number(ratingNode.value),
-        createdAt:Date.now()
-      };
-      const reviews = getReviews();
-      reviews.push(review);
-      saveReviews(reviews);
-
-      els.reviewForm.reset();
-      els.status.style.color="#157347";
-      els.status.textContent=t.posted;
-      renderReviews();
-      document.getElementById("feedCard").scrollIntoView({behavior:"smooth",block:"start"});
-      setTimeout(()=>els.status.textContent="",3500);
+      const t=translations[currentLang || "en"];
+      const name=document.getElementById("name").value.trim();
+      const feedback=document.getElementById("feedback").value.trim();
+      const ratingNode=document.querySelector('input[name="rating"]:checked');
+      if(!ratingNode){els.status.style.color="#b42318";els.status.textContent=t.needRating;return;}
+      if(!feedback){els.status.style.color="#b42318";els.status.textContent=t.needFeedback;return;}
+      if(!db){els.status.style.color="#b42318";els.status.textContent="Supabase is not configured. Update config.js.";return;}
+      const button=document.getElementById("submitBtn");button.disabled=true;
+      els.status.style.color="#667085";els.status.textContent="Submitting…";
+      const {error}=await db.from("customer_surveys").insert({
+        customer_name:name||null, rating:Number(ratingNode.value),
+        feedback,language:currentLang||"en"
+      });
+      button.disabled=false;
+      if(error){console.error(error);els.status.style.color="#b42318";els.status.textContent="Submission failed. Please try again.";return;}
+      els.reviewForm.reset();els.status.style.color="#157347";els.status.textContent=t.posted;
+      await loadApprovedReviews();
     });
 
     if(currentLang){
@@ -535,10 +527,11 @@
       els.reviewCard.classList.remove("hidden");
       els.statsCard.classList.remove("hidden");
       els.feedCard.classList.remove("hidden");
-      renderReviews();
+      loadApprovedReviews();
     }else{
       applyLanguage();
     }
+    if(!currentLang) loadApprovedReviews();
   </script>
 </body>
 </html>
